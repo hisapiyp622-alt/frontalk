@@ -1,0 +1,92 @@
+rules_version = '2';
+// フロントーク（料金見積もりシミュレーション） — Firestore セキュリティルール
+//
+// 店舗アカウントでログインしている場合のみ、その店舗自身のデータへアクセスできます。
+// 他店のデータは読むことも書くこともできません。
+// あわせて、書き込みの形（フィールド名）と大きさを検査し、
+// 不具合や不正なクライアントによる想定外の書き込みを弾きます。
+//
+// 反映方法: Firebaseコンソール → Firestore Database → ルール にこの内容を貼り付けて公開
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 共通: 書き込みサイズの上限（1ドキュメントの実効上限1MiBの少し手前で止める）
+    function sizeOk() {
+      return request.resource.size() < 900000;
+    }
+    function stamped() {
+      // アプリが必ず付ける印。付いていない書き込みはアプリ外からの可能性が高い
+      return request.resource.data.keys().hasAll(['clientId']);
+    }
+    /* 契約の器: contracts/{店舗UID} に販売側がコンソールから入れる契約状態。
+     *   status: "trial"（trialEndsAt まで）/ "active"（本契約）/ "suspended"（停止）
+     * ドキュメントが無い店舗は従来どおり（既存店舗を壊さない）。
+     * お試し終了・停止の店舗は、読み取りはできるが書き込みはできない
+     * （データは消えず、契約手続き後にそのまま使える）。 */
+    function contractData() {
+      return get(/databases/$(database)/documents/contracts/$(request.auth.uid)).data;
+    }
+    function contractOk() {
+      return !exists(/databases/$(database)/documents/contracts/$(request.auth.uid))
+        || contractData().status == 'active'
+        || (contractData().status == 'trial'
+            && (!('trialEndsAt' in contractData())
+                || request.time < contractData().trialEndsAt));
+    }
+
+    // contracts/{店舗のUID}: 契約状態。店舗は自分のぶんを読めるだけ（書き込みは販売側のコンソール操作のみ）
+    match /contracts/{storeId} {
+      allow read: if request.auth != null && request.auth.uid == storeId;
+      allow write: if false;
+    }
+
+    // stores/{店舗のUID}: 店舗情報＋料金マスタ
+    match /stores/{storeId} {
+      allow read: if request.auth != null && request.auth.uid == storeId;
+      allow write: if request.auth != null && request.auth.uid == storeId
+        && contractOk()
+        && sizeOk()
+        && request.resource.data.keys().hasOnly(
+             ['storeName', 'storeTel', 'staff', 'adminLock', 'master',
+              'clientId', 'updatedAtMs', 'updatedAt']);
+
+      // quotes/{担当者ID}: 作業中の見積もり
+      match /quotes/{staffId} {
+        allow read: if request.auth != null && request.auth.uid == storeId;
+        allow write: if request.auth != null && request.auth.uid == storeId
+          && contractOk()
+          && sizeOk() && stamped()
+          && request.resource.data.keys().hasOnly(['data', 'clientId', 'updatedAtMs', 'updatedAt']);
+      }
+      // saved/{担当者ID}: 保存した見積もり（del は削除の記録）
+      match /saved/{staffId} {
+        allow read: if request.auth != null && request.auth.uid == storeId;
+        allow write: if request.auth != null && request.auth.uid == storeId
+          && contractOk()
+          && sizeOk() && stamped()
+          && request.resource.data.keys().hasOnly(['list', 'del', 'clientId', 'updatedAtMs', 'updatedAt']);
+      }
+      // templates/{担当者ID}: テンプレート（_store は店舗共通テンプレート）
+      match /templates/{staffId} {
+        allow read: if request.auth != null && request.auth.uid == storeId;
+        allow write: if request.auth != null && request.auth.uid == storeId
+          && contractOk()
+          && sizeOk() && stamped()
+          && request.resource.data.keys().hasOnly(['list', 'clientId', 'updatedAtMs', 'updatedAt']);
+      }
+      // history/{履歴ID}: 料金マスタの履歴
+      match /history/{histId} {
+        allow read: if request.auth != null && request.auth.uid == storeId;
+        allow write: if request.auth != null && request.auth.uid == storeId && contractOk() && sizeOk();
+      }
+      // 上記以外のサブコレクションは作らせない
+      match /{other}/{doc} {
+        allow read: if request.auth != null && request.auth.uid == storeId;
+        allow write: if false;
+      }
+    }
+    // それ以外は一切許可しない
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
