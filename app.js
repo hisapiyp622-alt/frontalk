@@ -5,7 +5,7 @@
 (function () {
   "use strict";
 
-  var APP_VERSION = "1.110.0";
+  var APP_VERSION = "1.111.0";
 
   /* ---------- カメラ読み取り（アプリ内OCR）の入・切 ----------
    * 「現在のお支払い」カードの「カメラで読み取る」を出すかどうか。
@@ -3735,7 +3735,7 @@
    *   status: "trial"=お試し（trialEndsAt まで）／ "active"=本契約 ／ "suspended"=停止
    * ドキュメントが無い店舗は従来どおり動く（既存店舗を壊さないため）。
    * オフラインでも効くように、最後に読めた内容を端末に控えて起動時はそれを使う。
-   * 手順は _internal/OPERATIONS.md「契約の器」を参照。 */
+   * 手順は非公開リポジトリ docomo-quote-internal の OPERATIONS.md「契約の器」を参照。 */
   var CONTRACT_KEY = NS + "-contract-v1";
   var contractInfo = null;   // { uid, status, trialEndsAt(ms), fetchedAt }
   function loadContractCache() {
@@ -8506,6 +8506,11 @@
   function initIenakaLink() {
     var a = $("toIenaka");
     if (!a) return;
+    /* イエナカ単体版は製品の提供内容から外した（2026-08-20）。
+     * 社内版は /ienaka/ がこれまでどおり動くので、リンクは社内版だけに出す。
+     * ★ 単体版を製品に戻すときは、次の2行を消し、tools/build-product.js の
+     *   同梱も戻す（あちらにも目印コメントがある）。 */
+    if (!INTERNAL) { a.hidden = true; return; }
     a.addEventListener("click", function () {
       var st = activeStaff();
       try {
