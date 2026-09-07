@@ -5,7 +5,7 @@
 (function () {
   "use strict";
 
-  var APP_VERSION = "1.176.0";
+  var APP_VERSION = "1.178.0";
 
   /* ---------- カメラ読み取り（アプリ内OCR）の入・切 ----------
    * 「現在のお支払い」カードの「カメラで読み取る」を出すかどうか。
@@ -501,7 +501,7 @@
    * 月額の割引額はプランごとに違うため data.js の discounts.kosodate に持つ。 */
   var KOSODATE_VOICE_OFF = 880;
   var SLIM_PATTERN_KEYS = ["planId", "planChange", "tierIdx", "procType", "procTodo", "visitPurposes", "visitPurpose", "hearty", "kosodate",
-    "kaimashi", "u15", "u39", "tablet", "shitadori", "kishuRank", "dcardFirst", "devicePrice", "atamakin", "deviceName", "payMethod", "todoDcard", "todoDcardType", "todoDenki", "todoDenkiType",
+    "kaimashi", "u15", "u39", "tablet", "shitadori", "kishuRank", "dcardFirst", "dpayFirst", "devicePrice", "atamakin", "deviceName", "payMethod", "todoDcard", "todoDcardType", "todoDenki", "todoDenkiType",
     "todoGas", "todoHikari", "options", "optionKubun", "feeItems", "accSel"];
 
   /* ---------- 大阪ガス（ドコモガス）エリアの目安判定 ----------
@@ -758,7 +758,7 @@
       return '<label class="check"><input type="checkbox" data-nqv="' + k + '"> ' + esc(VISIT_NAMES[k]) + "</label>";
     }).join("");
     var cat = statsCatalog();
-    var nqOrder = ["proc:kishu", "kaimashi", "proc:mnp", "proc:shinki", "u15", "u39", "highend", "kishustd", "iphone", "tablet", "shitadori:", "device", "dcardfirst",
+    var nqOrder = ["proc:kishu", "kaimashi", "proc:mnp", "proc:shinki", "u15", "u39", "highend", "kishustd", "iphone", "tablet", "shitadori:", "device", "dcardfirst", "dpayfirst",
       "proc:", "plan:", "dcard:", "denki:", "gas", "ie:", "opt:", "maxAmazon", "fee:", "own:", "acc:"];
     function nqRank(k) {
       for (var i = 0; i < nqOrder.length; i++) if (k.indexOf(nqOrder[i]) === 0) return i;
@@ -1452,6 +1452,8 @@
     if (typeof c.iphone === "undefined") c.iphone = true;      // （再掲）iPhone
     // （再掲）dカード初回利用（店舗の指定・2026-09-07）
     if (typeof c.dcardFirst === "undefined") c.dcardFirst = true;
+    // （再掲）d払い初回利用（店舗の指定・2026-09-07）
+    if (typeof c.dpayFirst === "undefined") c.dpayFirst = true;
     if (typeof c.tablet === "undefined") c.tablet = true;      // タブレット総販
     if (typeof c.shitadori === "undefined") c.shitadori = true; // 下取り
     // home 5G を新規／機種変更で分ける（店舗の指定・2026-09-07）
@@ -1558,7 +1560,8 @@
     { id: "denwa", name: "ドコモ光電話" },
     { id: "denwaBV", name: "ドコモ光電話バリュー" },
     { id: "homeDenwaLight", name: "homeでんわ ライト" },
-    { id: "homeDenwaBasic", name: "homeでんわ ベーシック" }
+    { id: "homeDenwaBasic", name: "homeでんわ ベーシック" },
+    { id: "vsHikariTv", name: "ひかりTV 専門チャンネルプラン" }
   ];
   /* 光の申込区分。イエナカの APPLY_LABEL と同じ並び・同じ言い方にする */
   var STATS_APPLY_NAMES = {
@@ -1717,6 +1720,7 @@
     }
     if (cfg.iphone && devBought && statsIsIPhone(pt)) out["iphone"] = "（再掲）iPhone";
     if (cfg.dcardFirst && pt.dcardFirst) out["dcardfirst"] = "（再掲）dカード初回利用";
+    if (cfg.dpayFirst && pt.dpayFirst) out["dpayfirst"] = "（再掲）d払い初回利用";
     if (cfg.tablet && devBought && pt.tablet) out["tablet"] = "タブレット総販";
     if (cfg.shitadori && SHITADORI_NAMES[pt.shitadori]) {
       out["shitadori:" + pt.shitadori] = SHITADORI_NAMES[pt.shitadori];
@@ -1904,6 +1908,7 @@
         if (k.indexOf("ie:opt:") === 0) sc.ieOpts = true;
         if (k === "iphone") sc.iphone = true;
         if (k === "dcardfirst") sc.dcardFirst = true;
+        if (k === "dpayfirst") sc.dpayFirst = true;
         if (k === "tablet") sc.tablet = true;
         if (k.indexOf("shitadori:") === 0) sc.shitadori = true;
         if (k === "u15") sc.u15 = true;
@@ -1920,32 +1925,76 @@
    * ・回線の条件 … すべて満たした回線の数だけ数える（2台なら2件）
    * ・商談の条件（光）… 満たしていれば1件。回線の条件と混ぜたときは、
    *   光が付いている商談の中で、回線の条件を満たした回線を数える */
-  function cxCountRow(row, sets) {
+  /* この行が当たったか。当たっていれば
+   *   { keys, lines }  lines = 当たった回線の番号（商談だけの条件なら null）
+   * 当たっていなければ null。 */
+  function cxRowMatch(row, sets) {
     var keys = (row && row.keys) || [];
-    if (!keys.length) return 0;
+    if (!keys.length) return null;
     var wholeKeys = keys.filter(cxWholeKey);
     var lineKeys = keys.filter(function (k) { return !cxWholeKey(k); });
     for (var w = 0; w < wholeKeys.length; w++) {
-      if (!sets.whole[wholeKeys[w]]) return 0;
+      if (!sets.whole[wholeKeys[w]]) return null;
     }
-    if (!lineKeys.length) return wholeKeys.length ? 1 : 0;
-    var n = 0;
-    sets.lines.forEach(function (set) {
-      var ok = lineKeys.every(function (k) { return !!set[k]; });
-      if (ok) n++;
+    if (!lineKeys.length) return wholeKeys.length ? { keys: keys, lines: null } : null;
+    var idx = [];
+    sets.lines.forEach(function (set, i) {
+      if (lineKeys.every(function (k) { return !!set[k]; })) idx.push(i);
     });
-    return n;
+    return idx.length ? { keys: keys, lines: idx } : null;
   }
-  /* 1件の応対のポイント内訳。[{ id, name, pt, n, total }] */
+  function cxCountRow(row, sets) {
+    var m = cxRowMatch(row, sets);
+    if (!m) return 0;
+    return m.lines ? m.lines.length : 1;
+  }
+  /* 1件の応対のポイント内訳。[{ id, name, pt, n, total, covered }]
+   *
+   * 条件が重なる行は、細かいほうだけ数える（店舗の指定・2026-09-07）。
+   * 例: 「のりかえ×ポイ活MAX×U39」と「のりかえ×ポイ活MAX」を両方作ると、
+   *     U39のお客様は両方に当たってしまい、二重に計上されていた。
+   * 行Bの条件が行Aにすっかり含まれていて、同じ回線で両方当たったときは、
+   * その回線ではAだけ数える。数えなかった行は covered を立てて残し、
+   * 画面にグレーで出す（なぜ点が下がったのか分かるように）。 */
   function cxBreakdown(d, won, lines) {
     var rows = cxRows();
     if (!rows.length) return [];
     var sets = statsKeySets(d, won, lines);
+    var ms = rows.map(function (r) { return cxRowMatch(r, sets); });
+    var sigs = ms.map(function (m) {
+      if (!m) return null;
+      var o = {};
+      m.keys.forEach(function (k) { o[k] = true; });
+      return o;
+    });
     var out = [];
-    rows.forEach(function (r) {
-      var n = cxCountRow(r, sets);
-      if (!n) return;
-      out.push({ id: r.id, name: r.name || "（名前なし）", pt: num(r.pt), n: n, total: num(r.pt) * n });
+    rows.forEach(function (r, i) {
+      var m = ms[i];
+      if (!m) return;
+      /* この行の条件を丸ごと含む、もっと細かい行 */
+      var covers = [];
+      ms.forEach(function (m2, j) {
+        if (j === i || !m2) return;
+        if (m2.keys.length <= m.keys.length) return;
+        if (!m.keys.every(function (k) { return !!sigs[j][k]; })) return;
+        covers.push(j);
+      });
+      var n = 0, covered = false;
+      if (!m.lines) {
+        covered = covers.length > 0;
+        n = covered ? 0 : 1;
+      } else {
+        m.lines.forEach(function (li) {
+          var hidden = covers.some(function (j) {
+            var m2 = ms[j];
+            return !m2.lines || m2.lines.indexOf(li) >= 0;
+          });
+          if (hidden) covered = true; else n++;
+        });
+      }
+      if (!n && !covered) return;
+      out.push({ id: r.id, name: r.name || "（名前なし）", pt: num(r.pt),
+        n: n, total: num(r.pt) * n, covered: covered });
     });
     return out;
   }
@@ -2141,6 +2190,7 @@
     }
     if (cfg.iphone) out["iphone"] = "（再掲）iPhone";
     if (cfg.dcardFirst) out["dcardfirst"] = "（再掲）dカード初回利用";
+    if (cfg.dpayFirst) out["dpayfirst"] = "（再掲）d払い初回利用";
     if (cfg.tablet) out["tablet"] = "タブレット総販";
     if (cfg.shitadori) {
       Object.keys(SHITADORI_NAMES).forEach(function (k) {
@@ -2394,9 +2444,13 @@
           });
           /* ポイント（マスタ設定の「実績のポイント」）。成約した内容で数える。 */
           cxBreakdown(it.wonData || it.data, true, it.wonLines).forEach(function (x) {
-            if (!cxAgg[x.id]) cxAgg[x.id] = { name: x.name, pt: x.pt, n: 0, total: 0 };
+            if (!cxAgg[x.id]) {
+              cxAgg[x.id] = { name: x.name, pt: x.pt, n: 0, total: 0, covered: 0 };
+            }
             cxAgg[x.id].n += x.n;
             cxAgg[x.id].total += x.total;
+            // もっと細かい行で数えたぶん（画面にグレーで出す）
+            if (x.covered) cxAgg[x.id].covered++;
           });
           Object.keys(wonI).forEach(function (k) {
             var n = wonI[k].n;
@@ -2677,7 +2731,7 @@
     var catalog = statsCatalog();
 
     /* ---- 並び順 ---- */
-    var order = ["proc:kishu", "kaimashi", "proc:mnp", "proc:shinki", "u15", "u39", "highend", "kishustd", "iphone", "tablet", "shitadori:", "device", "dcardfirst",
+    var order = ["proc:kishu", "kaimashi", "proc:mnp", "proc:shinki", "u15", "u39", "highend", "kishustd", "iphone", "tablet", "shitadori:", "device", "dcardfirst", "dpayfirst",
       "proc:", "plan:", "dcard:", "denki:", "gas", "ie:", "opt:", "maxAmazon", "fee:", "own:", "acc:"];
     function rank(k) {
       for (var i = 0; i < order.length; i++) if (k.indexOf(order[i]) === 0) return i;
@@ -2818,7 +2872,9 @@
      * マスタ設定の「実績のポイント」に点数が入っているときだけ出す。
      * 何も入れていないお店では、これまでどおりの画面のまま。 */
     var cxAgg = agg.cx || {};
-    var cxKeys = Object.keys(cxAgg).filter(function (k) { return cxAgg[k].total !== 0; });
+    var cxKeys = Object.keys(cxAgg).filter(function (k) {
+      return cxAgg[k].total !== 0 || cxAgg[k].covered;
+    });
     if (cxOn()) {
       cxKeys.sort(function (a2, b2) { return cxAgg[b2].total - cxAgg[a2].total; });
       var cxSum = 0;
@@ -2834,12 +2890,20 @@
         h += '<div class="stats-scroll"><table class="stats-table">'
           + "<tr><th>項目</th><th>件数</th><th>点数</th><th>小計</th></tr>";
         cxKeys.forEach(function (k) {
-          h += "<tr><td>" + esc(cxAgg[k].name) + "</td><td>" + cxAgg[k].n + "</td><td>"
-            + cxAgg[k].pt + "</td><td><b>" + cxAgg[k].total + "</b></td></tr>";
+          var c = cxAgg[k];
+          h += '<tr' + (c.n ? "" : ' class="cx-covered"') + "><td>" + esc(c.name)
+            + (c.covered
+              ? '<div class="subrow">' + c.covered
+                + "件は、もっと細かい行で数えました</div>"
+              : "")
+            + "</td><td>" + c.n + "</td><td>" + c.pt
+            + "</td><td><b>" + c.total + "</b></td></tr>";
         });
         h += '<tr class="total"><td><b>合計</b></td><td></td><td></td><td><b>'
           + cxSum + "</b></td></tr></table></div>";
-        h += '<p class="hint">成約になった応対だけを数えています。'
+        h += '<p class="hint">条件が重なる行は、<strong>細かいほうだけ数えます</strong>'
+          + '（「のりかえ×ポイ活MAX×U39」と「のりかえ×ポイ活MAX」の両方を作っても、'
+          + '二重に数えません）。<br>成約になった応対だけを数えています。'
           + '点数と数え方は<strong>マスタ設定の「実績のポイント」</strong>で変えられます'
           + '（マスタ設定は担当者コードの画面から開きます）。</p>';
       }
@@ -4462,17 +4526,19 @@
   // 見積もり画面の「プラン世代」に出す名前
   var PLAN_GROUP_SEL_NAMES = {
     current: "現行プラン", biz: "法人プラン",
-    libmo: "LIBMO（のりかえ）", legacy: "旧プラン（受付終了）"
+    libmo: "LIBMO", legacy: "旧プラン（受付終了）"
   };
-  /* LIBMO はドコモとは別会社のサービスで、のりかえ（MNP）のときだけ扱う
-   * （店舗の指定・2026-09-07）。ただし**すでに LIBMO を選んでいる見積もり**では、
+  /* LIBMO はドコモとは別会社のサービスで、新規・のりかえ（MNP）のときだけ扱う
+   * （店舗の指定・2026-09-07。当初はのりかえだけだったが、新規でも売るとのことで
+   * 2026-09-07 に新規を足した）。ただし**すでに LIBMO を選んでいる見積もり**では、
    * 手続きのチェックを外しても一覧から消さない。消すとプランが未選択に
    * 戻り、保存した見積もりの金額が変わってしまうため（受付終了の扱いと同じ考え方）。 */
   function planGroupsFor(st) {
     return PLAN_GROUPS.filter(function (g) {
       if (g !== "libmo") return true;
       var todo = (st && st.procTodo) || {};
-      if (todo.mnp || (st && st.procType === "mnp")) return true;
+      var pt = st && st.procType;
+      if (todo.mnp || todo.shinki || pt === "mnp" || pt === "shinki") return true;
       if (st && st.planGroup === "libmo") return true;
       return (MASTER.plans || []).some(function (pl) {
         return pl.group === "libmo" && pl.id === (st && st.planId);
@@ -5055,7 +5121,7 @@
       /* ご来店の目的。①端末購入 以外で来店されて機種変更が入った場合は
        * 「買い増し」として実績に再掲する。①のときは買い増しの有無をチェックで持つ。 */
       visitPurposes: {}, kaimashi: false, u15: false, u39: false,
-      tablet: false, shitadori: "", kishuRank: "", dcardFirst: false,
+      tablet: false, shitadori: "", kishuRank: "", dcardFirst: false, dpayFirst: false,
       procTodo: {}, todoDcard: false, todoDenki: false, todoGas: false, todoHikari: false,
       todoGasEco: "",     // ガスの区分（std=スタンダード / eco=エコジョーズ）
       todoDenkiNow: "", todoGasNow: "",   // 現在ご契約中の会社（解約のご案内用）
@@ -8883,6 +8949,7 @@
     $("platRate").value = platRate(state);
     $("dDenki").checked = state.dDenki;
     $("dcardFirst").checked = !!state.dcardFirst;
+    $("dpayFirst").checked = !!state.dpayFirst;
     $("bizMembers").checked = !!state.bizMembers;
     $("shain").checked = !!state.shain;
     $("chokiOn").checked = state.choki !== "none";
@@ -10624,6 +10691,8 @@
       + (sc.iphone ? " checked" : "") + "> （再掲）iPhone</label>";
     h += '<label class="check"><input type="checkbox" data-sc-flag="dcardFirst"'
       + (sc.dcardFirst ? " checked" : "") + "> （再掲）dカード初回利用</label>";
+    h += '<label class="check"><input type="checkbox" data-sc-flag="dpayFirst"'
+      + (sc.dpayFirst ? " checked" : "") + "> （再掲）d払い初回利用</label>";
     h += '<label class="check"><input type="checkbox" data-sc-flag="tablet"'
       + (sc.tablet ? " checked" : "") + "> タブレット総販</label>";
     h += '<label class="check"><input type="checkbox" data-sc-flag="shitadori"'
@@ -10674,7 +10743,7 @@
     /* 月の目標。入れた項目だけが実績の「目標と進捗」に出る（管理者だけに見えます）。 */
     var goals = MASTER.statsGoalItems || {};
     var cat = statsCatalog();
-    var gOrder = ["proc:kishu", "kaimashi", "proc:mnp", "proc:shinki", "u15", "u39", "highend", "kishustd", "iphone", "tablet", "shitadori:", "device", "dcardfirst",
+    var gOrder = ["proc:kishu", "kaimashi", "proc:mnp", "proc:shinki", "u15", "u39", "highend", "kishustd", "iphone", "tablet", "shitadori:", "device", "dcardfirst", "dpayfirst",
       "proc:", "plan:", "dcard:", "denki:", "gas", "ie:", "opt:", "maxAmazon", "fee:", "own:", "acc:"];
     function gRank(k) {
       for (var i = 0; i < gOrder.length; i++) if (k.indexOf(gOrder[i]) === 0) return i;
@@ -13636,6 +13705,9 @@
     $("dDenki").addEventListener("change", function () { state.dDenki = this.checked; recalc(); });
     $("dcardFirst").addEventListener("change", function () {
       state.dcardFirst = this.checked; recalc();
+    });
+    $("dpayFirst").addEventListener("change", function () {
+      state.dpayFirst = this.checked; recalc();
     });
     $("bizMembers").addEventListener("change", function () { state.bizMembers = this.checked; recalc(); });
     $("shain").addEventListener("change", function () { state.shain = this.checked; recalc(); });
