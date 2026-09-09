@@ -1,0 +1,6 @@
+# Cloudflare Pages が読む見出しの設定（tools/lib/dist-extras.js が作る）
+# Cache-Control は書かない（既定の「毎回確かめる」が最良）
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: SAMEORIGIN
